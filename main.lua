@@ -1290,8 +1290,8 @@ end
 ----------------------------------------------------------------------
 
 -- Hier deine GitHub-Daten eintragen, wenn du das Repo hochgeladen hast:
-local GITHUB_USER   = "DEIN_GITHUB_NAME"
-local GITHUB_REPO   = "DEIN_REPOSITORY"
+local GITHUB_USER   = "issaf8888"
+local GITHUB_REPO   = "wireclient3"
 local GITHUB_BRANCH = "main"
 
 local BASE_URL = string.format(
@@ -1395,7 +1395,36 @@ end
 local function loadTabModule(tabInfo)
     local code, source = fetchTabCode(tabInfo.file)
     if not code then
+        local targetUrl = BASE_URL .. tabInfo.file
         warn(string.format("[WireWin] Tab '%s' konnte nicht geladen werden (%s)", tabInfo.title, tostring(source)))
+        showNotification("Fehler", "Tab " .. tabInfo.title .. " nicht gefunden! (Prüfe Repo)", 4)
+        
+        -- Hinweis-Karte direkt im leeren Tab anzeigen:
+        local page = tabPages[tabInfo.id]
+        if page then
+            addSection(page, "⚠️ Ladefehler")
+            local errCard = Instance.new("Frame")
+            errCard.Size = UDim2.new(1, 0, 0, 75)
+            errCard.BackgroundColor3 = Color3.fromRGB(40, 20, 20)
+            errCard.BackgroundTransparency = 0.3
+            errCard.BorderSizePixel = 0
+            errCard.Parent = page
+            addCorner(errCard, 6)
+            addStroke(errCard, Color3.fromRGB(255, 80, 80), 1, 0.4)
+
+            local errText = Instance.new("TextLabel")
+            errText.Size = UDim2.new(1, -20, 1, -10)
+            errText.Position = UDim2.new(0, 10, 0, 5)
+            errText.BackgroundTransparency = 1
+            errText.Font = Enum.Font.GothamMedium
+            errText.TextSize = 12
+            errText.TextColor3 = Color3.fromRGB(255, 180, 180)
+            errText.TextWrapped = true
+            errText.TextXAlignment = Enum.TextXAlignment.Left
+            errText.TextYAlignment = Enum.TextYAlignment.Center
+            errText.Text = "Konnte '" .. tabInfo.file .. "' nicht laden!\n\n1. Ist dein GitHub-Repo auf PUBLIC gestellt?\n2. Existiert der Ordner 'tabs/" .. tabInfo.file .. "' auf GitHub?"
+            errText.Parent = errCard
+        end
         return false
     end
 
