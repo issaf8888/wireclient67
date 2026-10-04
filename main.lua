@@ -1289,9 +1289,9 @@ end
 -- MODULAR TAB LOADER SYSTEM (GitHub & Local)
 ----------------------------------------------------------------------
 
--- Hier deine GitHub-Daten eintragen, wenn du das Repo hochgeladen hast:
+-- Hier deine GitHub-Daten eintragen:
 local GITHUB_USER   = "issaf8888"
-local GITHUB_REPO   = "wireclient3"
+local GITHUB_REPO   = "wireclient67"
 local GITHUB_BRANCH = "main"
 
 local BASE_URL = string.format(
@@ -1378,14 +1378,19 @@ local function fetchTabCode(fileName)
         end
     end
 
-    -- 2. GitHub HttpGet
+    -- 2. GitHub HttpGet (sucht in /tabs/ UND im Hauptordner)
     if game and game.HttpGet then
-        local url = BASE_URL .. fileName
-        local ok, content = pcall(function()
-            return game:HttpGet(url, true)
-        end)
-        if ok and content and #content > 0 and not content:find("404: Not Found") and not content:find("400: Invalid request") then
-            return content, "github (" .. url .. ")"
+        local urls = {
+            string.format("https://raw.githubusercontent.com/%s/%s/%s/tabs/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
+            string.format("https://raw.githubusercontent.com/%s/%s/%s/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
+        }
+        for _, url in ipairs(urls) do
+            local ok, content = pcall(function()
+                return game:HttpGet(url, true)
+            end)
+            if ok and content and #content > 0 and not content:find("404: Not Found") and not content:find("400: Invalid request") then
+                return content, "github (" .. url .. ")"
+            end
         end
     end
 
