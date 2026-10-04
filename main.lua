@@ -1363,6 +1363,35 @@ local tabsList = {
     { id = "Options",  file = "options.lua",  title = "Options" },
 }
 
+local function safeHttpGet(url)
+    -- Versuch 1: game:HttpGet(url)
+    if game and game.HttpGet then
+        local ok, res = pcall(function() return game:HttpGet(url) end)
+        if ok and type(res) == "string" and #res > 0 and not res:find("404: Not Found") and not res:find("400: Invalid request") then
+            return res
+        end
+    end
+
+    -- Versuch 2: game:HttpGet(url, true)
+    if game and game.HttpGet then
+        local ok, res = pcall(function() return game:HttpGet(url, true) end)
+        if ok and type(res) == "string" and #res > 0 and not res:find("404: Not Found") and not res:find("400: Invalid request") then
+            return res
+        end
+    end
+
+    -- Versuch 3: request / http_request / syn.request
+    local req = request or http_request or (syn and syn.request) or (http and http.request)
+    if req then
+        local ok, res = pcall(req, { Url = url, Method = "GET" })
+        if ok and res and res.Body and type(res.Body) == "string" and #res.Body > 0 and not res.Body:find("404: Not Found") and not res.Body:find("400: Invalid request") then
+            return res.Body
+        end
+    end
+
+    return nil
+end
+
 local function fetchTabCode(fileName)
     -- 1. Lokale Datei (im Executor Workspace oder tabs-Ordner)
     local localPaths = {
@@ -1378,38 +1407,33 @@ local function fetchTabCode(fileName)
         end
     end
 
-    -- 2. GitHub HttpGet (sucht in /tabs/ UND im Hauptordner)
-    if game and game.HttpGet then
-        local urls = {
-            string.format("https://raw.githubusercontent.com/%s/%s/%s/tabs/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
-            string.format("https://raw.githubusercontent.com/%s/%s/%s/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
-        }
-        for _, url in ipairs(urls) do
-            local ok, content = pcall(function()
-                return game:HttpGet(url, true)
-            end)
-            if ok and content and #content > 0 and not content:find("404: Not Found") and not content:find("400: Invalid request") then
-                return content, "github (" .. url .. ")"
-            end
+    -- 2. GitHub (sucht in /tabs/ UND im Hauptordner)
+    local urls = {
+        string.format("https://raw.githubusercontent.com/%s/%s/%s/tabs/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
+        string.format("https://raw.githubusercontent.com/%s/%s/%s/%s", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, fileName),
+    }
+    for _, url in ipairs(urls) do
+        local content = safeHttpGet(url)
+        if content then
+            return content, "github (" .. url .. ")"
         end
     end
 
-    return nil, "Nicht gefunden"
+    return nil, "Download fehlgeschlagen"
 end
 
 local function loadTabModule(tabInfo)
     local code, source = fetchTabCode(tabInfo.file)
     if not code then
-        local targetUrl = BASE_URL .. tabInfo.file
         warn(string.format("[WireWin] Tab '%s' konnte nicht geladen werden (%s)", tabInfo.title, tostring(source)))
-        showNotification("Fehler", "Tab " .. tabInfo.title .. " nicht gefunden! (Prüfe Repo)", 4)
+        showNotification("Fehler", "Tab " .. tabInfo.title .. " nicht gefunden!", 3)
         
         -- Hinweis-Karte direkt im leeren Tab anzeigen:
         local page = tabPages[tabInfo.id]
         if page then
             addSection(page, "⚠️ Ladefehler")
             local errCard = Instance.new("Frame")
-            errCard.Size = UDim2.new(1, 0, 0, 75)
+            errCard.Size = UDim2.new(1, 0, 0, 85)
             errCard.BackgroundColor3 = Color3.fromRGB(40, 20, 20)
             errCard.BackgroundTransparency = 0.3
             errCard.BorderSizePixel = 0
@@ -1427,7 +1451,7 @@ local function loadTabModule(tabInfo)
             errText.TextWrapped = true
             errText.TextXAlignment = Enum.TextXAlignment.Left
             errText.TextYAlignment = Enum.TextYAlignment.Center
-            errText.Text = "Konnte '" .. tabInfo.file .. "' nicht laden!\n\n1. Ist dein GitHub-Repo auf PUBLIC gestellt?\n2. Existiert der Ordner 'tabs/" .. tabInfo.file .. "' auf GitHub?"
+            errText.Text = "Konnte '" .. tabInfo.file .. "' nicht laden!\nGrund: " .. tostring(source) .. "\n\n1. Ist dein Repo 'wireclient67' auf PUBLIC?\n2. Liegt '" .. tabInfo.file .. "' auf GitHub?"
             errText.Parent = errCard
         end
         return false
@@ -1455,12 +1479,14 @@ local function loadTabModule(tabInfo)
     return true
 end
 
--- Alle Tabs sicher laden (Fehler in einem Tab stoppen das GUI nicht!)
-for _, tabInfo in ipairs(tabsList) do
-    task.spawn(function()
+-- Alle Tabs nacheinander sicher laden (stürzt Executor nicht ab!)
+task.spawn(function()
+    for _, tabInfo in ipairs(tabsList) do
         loadTabModule(tabInfo)
-    end)
-end
+        task.wait(0.08)
+    end
+end)
+
 
 
 LoadingFrame.BackgroundTransparency = 1
