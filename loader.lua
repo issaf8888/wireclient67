@@ -8,7 +8,7 @@ local GITHUB_USER   = "issaf8888"
 local GITHUB_REPO   = "wireclient67"
 local GITHUB_BRANCH = "main"
 
-local url = string.format("https://raw.githubusercontent.com/%s/%s/%s/main.lua", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH)
+local url = string.format("https://raw.githubusercontent.com/%s/%s/%s/main.lua?t=%d", GITHUB_USER, GITHUB_REPO, GITHUB_BRANCH, os.time())
 
 print("[WireWin] Lade Hauptskript von GitHub...")
 loadstring(game:HttpGet(url, true))()
