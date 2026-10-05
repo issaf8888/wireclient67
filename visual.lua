@@ -134,7 +134,7 @@ local espBoxColor       = Color3.fromRGB(255, 255, 255)
 local espTextColor      = Color3.fromRGB(255, 255, 255)
 local espHealthColor    = Color3.fromRGB(80, 255, 120)
 
-local espDrawings       = {}   -- { player = p, drawings = {...} }
+local espDrawings       = {}   -- [player] = { container, corners, healthBar, healthFill, nameLabel, distLabel }
 local espRenderConn     = nil
 
 -- Hilfsfunktion: 3D → 2D Bildschirmkoordinaten
@@ -142,6 +142,24 @@ local function worldToScreen(pos)
     local cam = workspace.CurrentCamera
     local screenPos, onScreen = cam:WorldToViewportPoint(pos)
     return Vector2.new(screenPos.X, screenPos.Y), screenPos.Z, onScreen
+end
+
+-- Hilfsfunktion: Berechne Bounding-Box aus mehreren 3D-Punkten
+local function getScreenBoundingBox(points)
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    local allOnScreen = false
+    local anyOnScreen = false
+    for _, pt in ipairs(points) do
+        local sp, depth, onScreen = worldToScreen(pt)
+        if depth > 0 then
+            anyOnScreen = true
+            if sp.X < minX then minX = sp.X end
+            if sp.Y < minY then minY = sp.Y end
+            if sp.X > maxX then maxX = sp.X end
+            if sp.Y > maxY then maxY = sp.Y end
+        end
+    end
+    return minX, minY, maxX - minX, maxY - minY, anyOnScreen
 end
 
 -- Zeichne 4 Ecken einer Box (Corner-Box-Stil)
@@ -200,67 +218,131 @@ local function hideCornerBox(corners)
     end
 end
 
--- ESP-Container über ScreenGui
+-- ==================================================================
+-- ESP-CANVAS (ScreenGui-Level, ZIndex 10)
+-- ==================================================================
 local ESPCanvas = Instance.new("Frame")
-ESPCanvas.Name              = "ESPCanvas"
+ESPCanvas.Name                   = "ESPCanvas"
 ESPCanvas.BackgroundTransparency = 1
-ESPCanvas.Size              = UDim2.new(1, 0, 1, 0)
-ESPCanvas.Position          = UDim2.new(0, 0, 0, 0)
-ESPCanvas.ZIndex            = 10
-ESPCanvas.Parent            = ScreenGui
+ESPCanvas.BorderSizePixel        = 0
+ESPCanvas.Size                   = UDim2.new(1, 0, 1, 0)
+ESPCanvas.Position               = UDim2.new(0, 0, 0, 0)
+ESPCanvas.ClipsDescendants       = false
+ESPCanvas.ZIndex                 = 10
+ESPCanvas.Parent                 = ScreenGui
+
+-- Berechne Roblox-Charakter BoundingBox aus mehreren Körperpunkten
+local function getCharBoundingBox(hrp)
+    -- Mehrere Punkte über den Charakter verteilt für präzise Bounding-Box
+    local p = hrp.Position
+    local points = {
+        p + Vector3.new(0, 2.7, 0),   -- Kopf oben
+        p + Vector3.new(0.6, 2.0, 0), -- Kopf rechts
+        p + Vector3.new(-0.6, 2.0, 0),-- Kopf links
+        p + Vector3.new(0.8, 0.5, 0), -- Torso rechts
+        p + Vector3.new(-0.8, 0.5, 0),-- Torso links
+        p + Vector3.new(1.4, 0.5, 0), -- Arm rechts oben
+        p + Vector3.new(-1.4, 0.5, 0),-- Arm links oben
+        p + Vector3.new(1.4, -0.8, 0),-- Arm rechts unten
+        p + Vector3.new(-1.4, -0.8, 0),-- Arm links unten
+        p + Vector3.new(0.5, -1.0, 0),-- Bein rechts oben
+        p + Vector3.new(-0.5, -1.0, 0),-- Bein links oben
+        p + Vector3.new(0.5, -2.9, 0),-- Bein rechts unten
+        p + Vector3.new(-0.5, -2.9, 0),-- Bein links unten
+    }
+    local cam = workspace.CurrentCamera
+    local minX, minY = math.huge, math.huge
+    local maxX, maxY = -math.huge, -math.huge
+    local anyOn = false
+    local firstDepth = 0
+    for _, pt in ipairs(points) do
+        local sp, depth, onScreen = cam:WorldToViewportPoint(pt)
+        if depth > 0 then
+            anyOn = true
+            if sp.X < minX then minX = sp.X end
+            if sp.Y < minY then minY = sp.Y end
+            if sp.X > maxX then maxX = sp.X end
+            if sp.Y > maxY then maxY = sp.Y end
+            firstDepth = depth
+        end
+    end
+    return minX, minY, maxX - minX, maxY - minY, anyOn, firstDepth
+end
 
 local function createEspDrawings(p)
     if p == LocalPlayer then return end
     if espDrawings[p] then return end
 
+    -- Container der DIREKT unter ESPCanvas liegt und full-screen ist
     local container = Instance.new("Frame")
+    container.Name                   = "ESP_" .. p.Name
     container.BackgroundTransparency = 1
-    container.Size     = UDim2.new(1, 0, 1, 0)
-    container.ZIndex   = 10
-    container.Visible  = false
-    container.Parent   = ESPCanvas
+    container.BorderSizePixel        = 0
+    container.Size                   = UDim2.new(1, 0, 1, 0)
+    container.Position               = UDim2.new(0, 0, 0, 0)
+    container.ClipsDescendants       = false
+    container.ZIndex                 = 10
+    container.Visible                = false
+    container.Parent                 = ESPCanvas
 
-    -- Corner Box (8 Linien für 4 Ecken)
+    -- Corner Box (8 Frames für 4 Ecken)
     local corners = makeCornerBox(container)
 
-    -- Health Bar (links von der Box)
+    -- Health Bar Hintergrund (links von der Box)
     local healthBar = Instance.new("Frame")
-    healthBar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    healthBar.Name                   = "HealthBar"
+    healthBar.BackgroundColor3       = Color3.fromRGB(15, 15, 15)
     healthBar.BackgroundTransparency = 0.3
-    healthBar.BorderSizePixel  = 0
-    healthBar.ZIndex            = 11
-    healthBar.Parent            = container
+    healthBar.BorderSizePixel        = 0
+    healthBar.ZIndex                 = 11
+    healthBar.Visible                = false
+    healthBar.Parent                 = container
+    local hbCorner = Instance.new("UICorner")
+    hbCorner.CornerRadius = UDim.new(0, 2)
+    hbCorner.Parent = healthBar
 
+    -- Health Bar Fill
     local healthFill = Instance.new("Frame")
-    healthFill.BackgroundColor3 = espHealthColor
-    healthFill.BorderSizePixel  = 0
-    healthFill.ZIndex            = 12
-    healthFill.AnchorPoint      = Vector2.new(0, 1)
-    healthFill.Parent            = healthBar
+    healthFill.Name                  = "HealthFill"
+    healthFill.BackgroundColor3      = espHealthColor
+    healthFill.BorderSizePixel       = 0
+    healthFill.ZIndex                = 12
+    healthFill.AnchorPoint           = Vector2.new(0, 1)
+    healthFill.Size                  = UDim2.new(1, 0, 1, 0)
+    healthFill.Position              = UDim2.new(0, 0, 1, 0)
+    healthFill.Visible               = false
+    healthFill.Parent                = healthBar
+    local hfCorner = Instance.new("UICorner")
+    hfCorner.CornerRadius = UDim.new(0, 2)
+    hfCorner.Parent = healthFill
 
     -- Name Label
     local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name                   = "NameLabel"
     nameLabel.BackgroundTransparency = 1
-    nameLabel.Font               = Enum.Font.GothamBold
-    nameLabel.TextColor3         = espTextColor
-    nameLabel.TextSize           = 11
-    nameLabel.TextStrokeTransparency = 0.3
-    nameLabel.TextStrokeColor3   = Color3.new(0,0,0)
-    nameLabel.TextXAlignment     = Enum.TextXAlignment.Center
-    nameLabel.ZIndex             = 13
-    nameLabel.Parent             = container
+    nameLabel.Font                   = Enum.Font.GothamBold
+    nameLabel.TextColor3             = espTextColor
+    nameLabel.TextSize               = 11
+    nameLabel.TextStrokeTransparency = 0.25
+    nameLabel.TextStrokeColor3       = Color3.new(0, 0, 0)
+    nameLabel.TextXAlignment         = Enum.TextXAlignment.Center
+    nameLabel.ZIndex                 = 13
+    nameLabel.Visible                = false
+    nameLabel.Parent                 = container
 
     -- Distance Label
     local distLabel = Instance.new("TextLabel")
+    distLabel.Name                   = "DistLabel"
     distLabel.BackgroundTransparency = 1
-    distLabel.Font               = Enum.Font.Gotham
-    distLabel.TextColor3         = Color3.fromRGB(200, 200, 200)
-    distLabel.TextSize           = 10
-    distLabel.TextStrokeTransparency = 0.3
-    distLabel.TextStrokeColor3   = Color3.new(0,0,0)
-    distLabel.TextXAlignment     = Enum.TextXAlignment.Center
-    distLabel.ZIndex             = 13
-    distLabel.Parent             = container
+    distLabel.Font                   = Enum.Font.Gotham
+    distLabel.TextColor3             = Color3.fromRGB(200, 200, 200)
+    distLabel.TextSize               = 10
+    distLabel.TextStrokeTransparency = 0.25
+    distLabel.TextStrokeColor3       = Color3.new(0, 0, 0)
+    distLabel.TextXAlignment         = Enum.TextXAlignment.Center
+    distLabel.ZIndex                 = 13
+    distLabel.Visible                = false
+    distLabel.Parent                 = container
 
     espDrawings[p] = {
         container  = container,
@@ -279,18 +361,22 @@ local function removeEspDrawings(p)
     end
 end
 
--- Für alle Spieler erstellen
+-- Für alle bereits verbundenen Spieler erstellen
 for _, p in ipairs(Players:GetPlayers()) do
     createEspDrawings(p)
 end
 Players.PlayerAdded:Connect(function(p)
+    task.wait(0.1)
     createEspDrawings(p)
 end)
 Players.PlayerRemoving:Connect(function(p)
+    task.wait(0.05)
     removeEspDrawings(p)
 end)
 
--- Update-Loop
+-- ================================================================
+-- ESP RENDER-LOOP (gefixt: korrekte absolute Koordinaten)
+-- ================================================================
 local function startEspLoop()
     if espRenderConn then return end
     espRenderConn = RunService.RenderStepped:Connect(function()
@@ -303,110 +389,105 @@ local function startEspLoop()
             return
         end
 
-        local cam      = workspace.CurrentCamera
-        local vp       = cam.ViewportSize
-        local myChar   = LocalPlayer.Character
-        local myHRP    = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local cam    = workspace.CurrentCamera
+        local myChar = LocalPlayer.Character
+        local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
 
         for p, d in pairs(espDrawings) do
-            if d and d.container and d.container.Parent then
-                local char = p.Character
-                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-                local hum  = char and char:FindFirstChild("Humanoid")
+            -- Sicherheits-Check: Container noch valide?
+            if not (d and d.container and d.container.Parent) then
+                espDrawings[p] = nil
+                continue
+            end
 
-                if char and hrp and hum then
-                    -- Distanz berechnen
-                    local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
+            local char = p.Character
+            local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            local hum  = char and char:FindFirstChildWhichIsA("Humanoid")
 
-                    -- 3D → 2D Bounding Box approximieren
-                    local headPos = hrp.Position + Vector3.new(0, 2.5, 0)
-                    local feetPos = hrp.Position - Vector3.new(0, 3.0, 0)
+            if char and hrp and hum and hum.Health > 0 then
+                -- Multi-Point Bounding Box für präzises Tracking
+                local bx, by, bw, bh, anyOn, depth = getCharBoundingBox(hrp)
 
-                    local topScreen, topDepth, topOn = worldToScreen(headPos)
-                    local botScreen, botDepth, botOn = worldToScreen(feetPos)
+                -- Distanz berechnen
+                local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
 
-                    if topOn and topDepth > 0 then
-                        d.container.Visible = true
+                if anyOn and depth > 0 and bw > 0 and bh > 0 then
+                    d.container.Visible = true
 
-                        -- Box Dimensionen
-                        local boxH = math.abs(topScreen.Y - botScreen.Y)
-                        local boxW = boxH * 0.55
-                        local bx   = topScreen.X - boxW * 0.5
-                        local by   = topScreen.Y
-                        local bw   = boxW
-                        local bh   = boxH
-
-                        -- Corner Box
-                        if espShowBox then
-                            updateCornerBox(d.corners, bx, by, bw, bh, espBoxColor)
-                        else
-                            hideCornerBox(d.corners)
-                        end
-
-                        -- Health Bar (links, 3px breit)
-                        if espShowHealth then
-                            local hpRatio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-                            local barX    = bx - 6
-                            local barY    = by
-                            local barH    = bh
-                            local barW    = 3
-
-                            -- Farbe: Grün → Gelb → Rot
-                            local hpColor
-                            if hpRatio > 0.5 then
-                                hpColor = Color3.fromRGB(
-                                    math.floor(255 * (1 - hpRatio) * 2),
-                                    255, 60
-                                )
-                            else
-                                hpColor = Color3.fromRGB(
-                                    255,
-                                    math.floor(255 * hpRatio * 2),
-                                    60
-                                )
-                            end
-
-                            d.healthBar.Position          = UDim2.new(0, barX, 0, barY)
-                            d.healthBar.Size              = UDim2.new(0, barW, 0, barH)
-                            d.healthBar.Visible           = true
-                            d.healthFill.Size             = UDim2.new(1, 0, hpRatio, 0)
-                            d.healthFill.Position         = UDim2.new(0, 0, 1 - hpRatio, 0)
-                            d.healthFill.BackgroundColor3 = hpColor
-                            d.healthFill.Visible          = true
-                        else
-                            d.healthBar.Visible  = false
-                            d.healthFill.Visible = false
-                        end
-
-                        -- Name Label (über der Box)
-                        if espShowName then
-                            d.nameLabel.Text       = p.DisplayName ~= "" and p.DisplayName or p.Name
-                            d.nameLabel.TextColor3 = espTextColor
-                            d.nameLabel.Position   = UDim2.new(0, bx - 30, 0, by - 16)
-                            d.nameLabel.Size       = UDim2.new(0, bw + 60, 0, 14)
-                            d.nameLabel.Visible    = true
-                        else
-                            d.nameLabel.Visible = false
-                        end
-
-                        -- Distance Label (unter der Box)
-                        if espShowDistance then
-                            local distStr        = string.format("[%.0fm]", dist)
-                            d.distLabel.Text     = distStr
-                            d.distLabel.Position = UDim2.new(0, bx - 20, 0, by + bh + 2)
-                            d.distLabel.Size     = UDim2.new(0, bw + 40, 0, 13)
-                            d.distLabel.Visible  = true
-                        else
-                            d.distLabel.Visible = false
-                        end
+                    -- Corner Box um die Bounding Box
+                    if espShowBox then
+                        updateCornerBox(d.corners, bx, by, bw, bh, espBoxColor)
                     else
-                        d.container.Visible = false
+                        hideCornerBox(d.corners)
                     end
+
+                    -- Health Bar (links, 4px breit)
+                    if espShowHealth then
+                        local hpRatio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+                        local barX    = bx - 7
+                        local barY    = by
+                        local barH    = bh
+                        local barW    = 4
+
+                        -- Farbe: Grün → Gelb → Rot
+                        local hpColor
+                        if hpRatio > 0.5 then
+                            hpColor = Color3.fromRGB(
+                                math.floor(255 * (1 - hpRatio) * 2),
+                                220, 60
+                            )
+                        else
+                            hpColor = Color3.fromRGB(
+                                255,
+                                math.floor(220 * hpRatio * 2),
+                                40
+                            )
+                        end
+
+                        d.healthBar.Position          = UDim2.new(0, barX, 0, barY)
+                        d.healthBar.Size              = UDim2.new(0, barW, 0, barH)
+                        d.healthBar.Visible           = true
+                        d.healthFill.Size             = UDim2.new(1, 0, hpRatio, 0)
+                        d.healthFill.Position         = UDim2.new(0, 0, 1 - hpRatio, 0)
+                        d.healthFill.BackgroundColor3 = hpColor
+                        d.healthFill.Visible          = true
+                    else
+                        d.healthBar.Visible  = false
+                        d.healthFill.Visible = false
+                    end
+
+                    -- Name Label (über der Box)
+                    if espShowName then
+                        local displayName = (p.DisplayName ~= "" and p.DisplayName ~= p.Name)
+                            and (p.DisplayName .. " [" .. p.Name .. "]")
+                            or p.Name
+                        d.nameLabel.Text       = displayName
+                        d.nameLabel.TextColor3 = espTextColor
+                        d.nameLabel.Position   = UDim2.new(0, bx - 30, 0, by - 17)
+                        d.nameLabel.Size       = UDim2.new(0, bw + 60, 0, 14)
+                        d.nameLabel.Visible    = true
+                    else
+                        d.nameLabel.Visible = false
+                    end
+
+                    -- Distance Label (unter der Box)
+                    if espShowDistance then
+                        local distStr        = string.format("[%.0fm]", dist)
+                        d.distLabel.Text     = distStr
+                        d.distLabel.Position = UDim2.new(0, bx - 20, 0, by + bh + 3)
+                        d.distLabel.Size     = UDim2.new(0, bw + 40, 0, 13)
+                        d.distLabel.Visible  = true
+                    else
+                        d.distLabel.Visible = false
+                    end
+
                 else
+                    -- Nicht auf Bildschirm → alles verstecken
                     d.container.Visible = false
                 end
             else
-                espDrawings[p] = nil
+                -- Kein Charakter oder tot
+                d.container.Visible = false
             end
         end
     end)
@@ -414,79 +495,137 @@ end
 
 startEspLoop()
 
--- ── ESP Preview Panel ───────────────────────────────────────────────
--- Zeigt eine Vorschau der ESP-Box direkt im Tab
+-- ==================================================================
+-- ESP SIDE-PANEL (Floating, rechts neben dem Menü)
+-- Zeigt Roblox-Charakter-Outline als ESP-Preview
+-- ==================================================================
 
-local previewCard = Instance.new("Frame")
-previewCard.Name = "ESPPreviewCard"
-previewCard.Size = UDim2.new(1, 0, 0, 130)
-previewCard.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-previewCard.BackgroundTransparency = 0.97
-previewCard.BorderSizePixel = 0
-previewCard.ZIndex = 4
-previewCard.Parent = VisualPage
-addCorner(previewCard, 8)
-addStroke(previewCard, Color3.fromRGB(255, 255, 255), 1, 0.94)
+local ESPSidePanel = Instance.new("Frame")
+ESPSidePanel.Name                   = "ESPSidePanel"
+ESPSidePanel.Size                   = UDim2.new(0, 110, 0, 200)
+ESPSidePanel.AnchorPoint            = Vector2.new(0, 0.5)
+ESPSidePanel.BackgroundColor3       = Color3.fromRGB(6, 6, 6)
+ESPSidePanel.BackgroundTransparency = 0.05
+ESPSidePanel.BorderSizePixel        = 0
+ESPSidePanel.ZIndex                 = 20
+ESPSidePanel.Visible                = false
+ESPSidePanel.Parent                 = ScreenGui
+addCorner(ESPSidePanel, 12)
+addStroke(ESPSidePanel, Color3.fromRGB(255, 255, 255), 1, 0.82)
 
-local previewTitle = Instance.new("TextLabel")
-previewTitle.BackgroundTransparency = 1
-previewTitle.Position = UDim2.new(0, 12, 0, 8)
-previewTitle.Size = UDim2.new(0.5, -16, 0, 14)
-previewTitle.Font = Enum.Font.GothamMedium
-previewTitle.Text = "ESP VORSCHAU"
-previewTitle.TextColor3 = Color3.fromRGB(180, 180, 180)
-previewTitle.TextSize = 10
-previewTitle.TextXAlignment = Enum.TextXAlignment.Left
-previewTitle.ZIndex = 5
-previewTitle.Parent = previewCard
-
--- Preview-Canvas
-local previewCanvas = Instance.new("Frame")
-previewCanvas.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-previewCanvas.BackgroundTransparency = 0.4
-previewCanvas.Position = UDim2.new(0.5, -50, 0, 26)
-previewCanvas.Size = UDim2.new(0, 100, 0, 95)
-previewCanvas.ZIndex = 5
-previewCanvas.ClipsDescendants = true
-previewCanvas.Parent = previewCard
-addCorner(previewCanvas, 4)
-addStroke(previewCanvas, Color3.fromRGB(255, 255, 255), 1, 0.9)
-
--- Fake "Charakter-Silhouette" im Preview
-local silhouette = Instance.new("Frame")
-silhouette.AnchorPoint = Vector2.new(0.5, 1)
-silhouette.Position = UDim2.new(0.5, 0, 0.94, 0)
-silhouette.Size = UDim2.new(0, 18, 0, 42)
-silhouette.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-silhouette.BackgroundTransparency = 0.85
-silhouette.BorderSizePixel = 0
-silhouette.ZIndex = 6
-silhouette.Parent = previewCanvas
-addCorner(silhouette, 3)
-
--- Kopf Kreis
-local head = Instance.new("Frame")
-head.AnchorPoint = Vector2.new(0.5, 1)
-head.Position = UDim2.new(0.5, 0, 0.06, 12)
-head.Size = UDim2.new(0, 14, 0, 14)
-head.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-head.BackgroundTransparency = 0.82
-head.BorderSizePixel = 0
-head.ZIndex = 6
-head.Parent = previewCanvas
-addCorner(head, 7)
-
--- Preview: Corner Box Lines (statisch)
-local function makePreviewLine(parent, px, py, pw, ph, col)
-    local l = Instance.new("Frame")
-    l.BackgroundColor3 = col or Color3.fromRGB(255, 255, 255)
-    l.BorderSizePixel = 0
-    l.ZIndex = 7
-    l.Position = UDim2.new(0, px, 0, py)
-    l.Size = UDim2.new(0, pw, 0, ph)
-    l.Parent = parent
-    return l
+-- Positionierung: rechts neben dem Hauptfenster
+local function updateSidePanelPosition()
+    local mf = MainFrame
+    if not mf or not mf.Parent then return end
+    local vp = workspace.CurrentCamera.ViewportSize
+    local mfPos = mf.AbsolutePosition
+    local mfSize = mf.AbsoluteSize
+    ESPSidePanel.Position = UDim2.new(
+        0, mfPos.X + mfSize.X + 12,
+        0, mfPos.Y + mfSize.Y * 0.5
+    )
 end
+
+-- Panel-Header
+local panelHeader = Instance.new("TextLabel")
+panelHeader.BackgroundTransparency = 1
+panelHeader.Position               = UDim2.new(0, 0, 0, 8)
+panelHeader.Size                   = UDim2.new(1, 0, 0, 14)
+panelHeader.Font                   = Enum.Font.GothamBold
+panelHeader.Text                   = "ESP PREVIEW"
+panelHeader.TextColor3             = Color3.fromRGB(160, 160, 160)
+panelHeader.TextSize               = 9
+panelHeader.TextXAlignment         = Enum.TextXAlignment.Center
+panelHeader.ZIndex                 = 21
+panelHeader.Parent                 = ESPSidePanel
+addStroke(panelHeader, Color3.fromRGB(255,255,255), 1, 0.85)
+
+-- Divider
+local panelDiv = Instance.new("Frame")
+panelDiv.BackgroundColor3       = Color3.fromRGB(255, 255, 255)
+panelDiv.BackgroundTransparency = 0.9
+panelDiv.BorderSizePixel        = 0
+panelDiv.Position               = UDim2.new(0, 10, 0, 26)
+panelDiv.Size                   = UDim2.new(1, -20, 0, 1)
+panelDiv.ZIndex                 = 21
+panelDiv.Parent                 = ESPSidePanel
+
+-- Canvas für die Charakter-Preview
+local panelCanvas = Instance.new("Frame")
+panelCanvas.Name                   = "PanelCanvas"
+panelCanvas.BackgroundColor3       = Color3.fromRGB(10, 10, 10)
+panelCanvas.BackgroundTransparency = 0.5
+panelCanvas.BorderSizePixel        = 0
+panelCanvas.Position               = UDim2.new(0.5, -42, 0, 32)
+panelCanvas.Size                   = UDim2.new(0, 84, 0, 155)
+panelCanvas.ClipsDescendants       = false
+panelCanvas.ZIndex                 = 21
+panelCanvas.Parent                 = ESPSidePanel
+addCorner(panelCanvas, 6)
+addStroke(panelCanvas, Color3.fromRGB(255, 255, 255), 1, 0.88)
+
+-- ── Roblox Charakter Outline (nur Strokes, kein Fill) ──
+-- Koordinaten innerhalb von panelCanvas (84×155)
+-- Kopf: ca. 28x28 zentriert
+local function makeOutlineRect(parent, x, y, w, h, cornerR, col, zIdx)
+    local f = Instance.new("Frame")
+    f.BackgroundTransparency = 1
+    f.BorderSizePixel        = 0
+    f.Position               = UDim2.new(0, x, 0, y)
+    f.Size                   = UDim2.new(0, w, 0, h)
+    f.ZIndex                 = zIdx or 22
+    f.Parent                 = parent
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, cornerR or 3)
+    corner.Parent = f
+    local stroke = Instance.new("UIStroke")
+    stroke.Color       = col or Color3.fromRGB(255, 255, 255)
+    stroke.Thickness   = 1.5
+    stroke.Transparency = 0
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = f
+    return f, stroke
+end
+
+-- Charakter-Outline Referenz-Variablen (für Farb-Update)
+local charOutlineParts = {}
+
+local function buildCharOutline(col)
+    col = col or Color3.fromRGB(255, 255, 255)
+    -- Lösche alte
+    for _, obj in ipairs(charOutlineParts) do
+        pcall(function() obj:Destroy() end)
+    end
+    charOutlineParts = {}
+
+    -- Kopf (Kreis-Outline)
+    local headFrame, headStroke = makeOutlineRect(panelCanvas, 28, 8, 28, 28, 14, col, 23)
+    table.insert(charOutlineParts, headFrame)
+
+    -- Torso
+    local torsoFrame, torsoStroke = makeOutlineRect(panelCanvas, 24, 40, 36, 42, 3, col, 23)
+    table.insert(charOutlineParts, torsoFrame)
+
+    -- Linker Arm
+    local larmFrame, larmStroke = makeOutlineRect(panelCanvas, 6, 40, 16, 36, 3, col, 23)
+    table.insert(charOutlineParts, larmFrame)
+
+    -- Rechter Arm
+    local rarmFrame, rarmStroke = makeOutlineRect(panelCanvas, 62, 40, 16, 36, 3, col, 23)
+    table.insert(charOutlineParts, rarmFrame)
+
+    -- Linkes Bein
+    local llegFrame, llegStroke = makeOutlineRect(panelCanvas, 24, 86, 16, 56, 3, col, 23)
+    table.insert(charOutlineParts, llegFrame)
+
+    -- Rechtes Bein
+    local rlegFrame, rlegStroke = makeOutlineRect(panelCanvas, 44, 86, 16, 56, 3, col, 23)
+    table.insert(charOutlineParts, rlegFrame)
+
+    return headStroke, torsoStroke
+end
+
+buildCharOutline(espBoxColor)
 
 -- Preview-Farb-Update-Funktion
 local previewLines = {}
@@ -495,106 +634,95 @@ local previewDistLbl = nil
 local previewHpBar   = nil
 local previewHpFill  = nil
 
-local function rebuildPreview()
-    -- Lösche alte Linien
-    for _, l in ipairs(previewLines) do pcall(function() l:Destroy() end) end
-    previewLines = {}
+-- Positionier-Update bei sichtbarem Panel
+local sidePanelRenderConn = nil
+local function startSidePanelTracking()
+    if sidePanelRenderConn then return end
+    sidePanelRenderConn = RunService.RenderStepped:Connect(function()
+        if ESPSidePanel.Visible then
+            updateSidePanelPosition()
+        end
+    end)
+end
+startSidePanelTracking()
 
-    if previewNameLbl then pcall(function() previewNameLbl:Destroy() end) end
-    if previewDistLbl then pcall(function() previewDistLbl:Destroy() end) end
+local function rebuildPreview()
+    -- Outline Farbe updaten
+    buildCharOutline(espBoxColor)
+
+    -- HP Bar (links vom Canvas, Preview)
     if previewHpBar   then pcall(function() previewHpBar:Destroy()   end) end
     if previewHpFill  then pcall(function() previewHpFill:Destroy()  end) end
+    if previewNameLbl then pcall(function() previewNameLbl:Destroy() end) end
+    if previewDistLbl then pcall(function() previewDistLbl:Destroy() end) end
 
-    -- Box bounds innerhalb previewCanvas (Offset-Koordinaten)
-    local BX, BY, BW, BH = 19, 3, 62, 58
-    local CL = 9  -- Ecken-Länge
-    local TH = 1.5 -- Thickness
-
-    -- 4 Ecken × 2 Linien
-    local boxDef = {
-        -- TL
-        {BX,        BY,        CL, TH},
-        {BX,        BY,        TH, CL},
-        -- TR
-        {BX+BW-CL,  BY,        CL, TH},
-        {BX+BW-TH,  BY,        TH, CL},
-        -- BL
-        {BX,        BY+BH-TH,  CL, TH},
-        {BX,        BY+BH-CL,  TH, CL},
-        -- BR
-        {BX+BW-CL,  BY+BH-TH,  CL, TH},
-        {BX+BW-TH,  BY+BH-CL,  TH, CL},
-    }
-
-    if espShowBox then
-        for _, d in ipairs(boxDef) do
-            local l = makePreviewLine(previewCanvas, d[1], d[2], d[3], d[4], espBoxColor)
-            table.insert(previewLines, l)
-        end
-    end
-
-    -- HP Bar links
     if espShowHealth then
         previewHpBar = Instance.new("Frame")
-        previewHpBar.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-        previewHpBar.BackgroundTransparency = 0.3
-        previewHpBar.BorderSizePixel = 0
-        previewHpBar.ZIndex = 7
-        previewHpBar.Position = UDim2.new(0, BX - 5, 0, BY)
-        previewHpBar.Size = UDim2.new(0, 3, 0, BH)
-        previewHpBar.Parent = previewCanvas
+        previewHpBar.BackgroundColor3       = Color3.fromRGB(10, 10, 10)
+        previewHpBar.BackgroundTransparency = 0.2
+        previewHpBar.BorderSizePixel        = 0
+        previewHpBar.ZIndex                 = 24
+        previewHpBar.Position               = UDim2.new(0, -8, 0, 0)
+        previewHpBar.Size                   = UDim2.new(0, 4, 1, 0)
+        previewHpBar.Parent                 = panelCanvas
+        local hbcorner = Instance.new("UICorner")
+        hbcorner.CornerRadius = UDim.new(0, 2)
+        hbcorner.Parent = previewHpBar
 
         previewHpFill = Instance.new("Frame")
-        previewHpFill.BackgroundColor3 = Color3.fromRGB(80, 255, 120)
-        previewHpFill.BorderSizePixel = 0
-        previewHpFill.ZIndex = 8
-        previewHpFill.AnchorPoint = Vector2.new(0, 1)
-        previewHpFill.Position = UDim2.new(0, 0, 1, 0)
-        previewHpFill.Size = UDim2.new(1, 0, 0.75, 0)
-        previewHpFill.Parent = previewHpBar
+        previewHpFill.BackgroundColor3  = Color3.fromRGB(80, 255, 120)
+        previewHpFill.BorderSizePixel   = 0
+        previewHpFill.ZIndex            = 25
+        previewHpFill.AnchorPoint       = Vector2.new(0, 1)
+        previewHpFill.Position          = UDim2.new(0, 0, 1, 0)
+        previewHpFill.Size              = UDim2.new(1, 0, 0.75, 0)
+        previewHpFill.Parent            = previewHpBar
+        local hfcorner = Instance.new("UICorner")
+        hfcorner.CornerRadius = UDim.new(0, 2)
+        hfcorner.Parent = previewHpFill
     end
 
-    -- Name
     if espShowName then
         previewNameLbl = Instance.new("TextLabel")
         previewNameLbl.BackgroundTransparency = 1
-        previewNameLbl.Font = Enum.Font.GothamBold
-        previewNameLbl.TextColor3 = espTextColor
-        previewNameLbl.TextSize = 9
+        previewNameLbl.Font                   = Enum.Font.GothamBold
+        previewNameLbl.TextColor3             = espTextColor
+        previewNameLbl.TextSize               = 9
         previewNameLbl.TextStrokeTransparency = 0.2
-        previewNameLbl.TextStrokeColor3 = Color3.new(0,0,0)
-        previewNameLbl.Text = "PlayerName"
-        previewNameLbl.Position = UDim2.new(0, BX - 8, 0, BY - 13)
-        previewNameLbl.Size = UDim2.new(0, BW + 16, 0, 12)
-        previewNameLbl.TextXAlignment = Enum.TextXAlignment.Center
-        previewNameLbl.ZIndex = 8
-        previewNameLbl.Parent = previewCanvas
+        previewNameLbl.TextStrokeColor3       = Color3.new(0,0,0)
+        previewNameLbl.Text                   = "PlayerName"
+        previewNameLbl.Position               = UDim2.new(0, 0, 0, -14)
+        previewNameLbl.Size                   = UDim2.new(1, 0, 0, 12)
+        previewNameLbl.TextXAlignment         = Enum.TextXAlignment.Center
+        previewNameLbl.ZIndex                 = 24
+        previewNameLbl.Parent                 = panelCanvas
     end
 
-    -- Distance
     if espShowDistance then
         previewDistLbl = Instance.new("TextLabel")
         previewDistLbl.BackgroundTransparency = 1
-        previewDistLbl.Font = Enum.Font.Gotham
-        previewDistLbl.TextColor3 = Color3.fromRGB(200, 200, 200)
-        previewDistLbl.TextSize = 8
+        previewDistLbl.Font                   = Enum.Font.Gotham
+        previewDistLbl.TextColor3             = Color3.fromRGB(200, 200, 200)
+        previewDistLbl.TextSize               = 8
         previewDistLbl.TextStrokeTransparency = 0.2
-        previewDistLbl.TextStrokeColor3 = Color3.new(0,0,0)
-        previewDistLbl.Text = "[42m]"
-        previewDistLbl.Position = UDim2.new(0, BX - 8, 0, BY + BH + 1)
-        previewDistLbl.Size = UDim2.new(0, BW + 16, 0, 11)
-        previewDistLbl.TextXAlignment = Enum.TextXAlignment.Center
-        previewDistLbl.ZIndex = 8
-        previewDistLbl.Parent = previewCanvas
+        previewDistLbl.TextStrokeColor3       = Color3.new(0,0,0)
+        previewDistLbl.Text                   = "[42m]"
+        previewDistLbl.Position               = UDim2.new(0, 0, 1, 2)
+        previewDistLbl.Size                   = UDim2.new(1, 0, 0, 11)
+        previewDistLbl.TextXAlignment         = Enum.TextXAlignment.Center
+        previewDistLbl.ZIndex                 = 24
+        previewDistLbl.Parent                 = panelCanvas
     end
 end
 
 rebuildPreview()
+updateSidePanelPosition()
 
 -- ── ESP Toggle Controls ──────────────────────────────────────────────
 
 addToggle(VisualPage, "ESP Aktivieren", "Zeigt allen Spielern Corner Box, Health, Name & Distanz", false, function(enabled)
     espEnabled = enabled
+    ESPSidePanel.Visible = true  -- Side Panel immer sichtbar wenn ESP aktiv oder in Tab
     if not enabled then
         for _, d in pairs(espDrawings) do
             if d and d.container then d.container.Visible = false end
@@ -621,6 +749,10 @@ addToggle(VisualPage, "ESP Distanz", "Zeigt Entfernung in Metern unter der Box",
     espShowDistance = enabled
     rebuildPreview()
 end)
+
+-- Side Panel beim ersten Öffnen des Visual-Tabs anzeigen
+ESPSidePanel.Visible = true
+updateSidePanelPosition()
 
 -- ESP Farben
 addSection(VisualPage, "ESP Farben")
@@ -685,7 +817,7 @@ for _, cp in ipairs(espBoxColPresets) do
     addCorner(sw, 4)
     sw.MouseButton1Click:Connect(function()
         espBoxColor = cp.col
-        rebuildPreview()
+        rebuildPreview()  -- Outline-Farbe updaten
     end)
 end
 
