@@ -397,8 +397,7 @@ local function startEspLoop()
             -- Sicherheits-Check: Container noch valide?
             if not (d and d.container and d.container.Parent) then
                 espDrawings[p] = nil
-                continue
-            end
+            else
 
             local char = p.Character
             local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -489,6 +488,7 @@ local function startEspLoop()
                 -- Kein Charakter oder tot
                 d.container.Visible = false
             end
+            end -- end Sicherheits-Check else
         end
     end)
 end
@@ -716,7 +716,7 @@ local function rebuildPreview()
 end
 
 rebuildPreview()
-updateSidePanelPosition()
+task.defer(updateSidePanelPosition)
 
 -- ── ESP Toggle Controls ──────────────────────────────────────────────
 
@@ -752,7 +752,11 @@ end)
 
 -- Side Panel beim ersten Öffnen des Visual-Tabs anzeigen
 ESPSidePanel.Visible = true
-updateSidePanelPosition()
+task.defer(updateSidePanelPosition)
+task.spawn(function()
+    task.wait(0.5)
+    updateSidePanelPosition()
+end)
 
 -- ESP Farben
 addSection(VisualPage, "ESP Farben")
